@@ -122,6 +122,8 @@ class InboxViewModel @Inject constructor(
             )
             notes.update { it - id }
             rankings.update { it - id }
+            // Its prompt, if one is still in the shade, has been answered here.
+            item.row.txn.sessionId?.let { notifier.cancelPrompt(it) }
             if (txns.unsortedCount() == 0) notifier.clearLogged()
         }
     }
@@ -129,7 +131,9 @@ class InboxViewModel @Inject constructor(
     /** A misread notification: not a payment after all. */
     fun discard(id: Long) {
         viewModelScope.launch {
+            val txn = txns.byId(id)
             repository.deleteByIds(listOf(id))
+            txn?.sessionId?.let { notifier.cancelPrompt(it) }
             if (txns.unsortedCount() == 0) notifier.clearLogged()
         }
     }

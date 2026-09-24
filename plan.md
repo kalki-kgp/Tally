@@ -535,7 +535,14 @@ Debug-signed for sideloading; minification off; ~28 MB.
 - Bulk multi-select in Activity exists in the view model, not in the UI.
 - No onboarding flow; the Home permission banner does that job.
 
-### Sort later, and amounts read from notifications (v17, schema v5)
+### Amounts read from notifications, the prompt kept (v17–v18, schema v5)
+
+v18 correction: v17 made "sort later" the default and so removed the prompt after
+each payment. The owner wanted the prompt kept, only with the amount already in
+it. The prompt is back as the default; a read amount turns it into the category
+step directly; sort later is an opt-in switch. The rest of this section stands.
+
+#### v17 as first built
 
 The owner stopped using Tally after three or four days. The prompt after every
 payment was the reason: the question arrived at the least convenient moment, and

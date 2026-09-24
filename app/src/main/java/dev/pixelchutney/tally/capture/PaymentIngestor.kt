@@ -46,6 +46,25 @@ class PaymentIngestor @Inject constructor(
     private val mutex = Mutex()
 
     /**
+     * Payments read while their payment app is still open, keyed by visit. The
+     * prompt goes out when the visit ends — the same moment it always has — not
+     * while the person is still looking at the payment screen.
+     */
+    private val waitingForExit = mutableMapOf<Long, Pair<Long, Ranking>>()
+
+    init {
+        scope.launch {
+            tracker.visitsEndedWithPayment.collect { sessionId ->
+                mutex.withLock {
+                    waitingForExit.remove(sessionId)?.let { (id, ranking) ->
+                        runCatching { announce(id, ranking, sessionId) }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * [fromPaymentApp] is true when a UPI app posted it, false for a bank text
      * or a bank app — which says nothing about which payment app was used.
      */
@@ -105,12 +124,17 @@ class PaymentIngestor @Inject constructor(
         sourceApp?.let { tracker.recordLogged(it) }
         Log.d(TAG, "logged ${payment.amountPaise} from $notifyingPackage")
 
-        announce(id, local)
-        scope.launch { runCatching { refine(id, input.copy(excludeTxnId = id)) } }
+        val sessionId = visit?.sessionId
+        if (sessionId != null && visit.inProgress && tracker.isInProgress(sessionId)) {
+            waitingForExit[sessionId] = id to local
+        } else {
+            announce(id, local, sessionId)
+        }
+        scope.launch { runCatching { refine(id, input.copy(excludeTxnId = id), sessionId) } }
     }
 
     /** Haiku's pass, after the row is safe. Only ever improves a guess. */
-    private suspend fun refine(id: Long, input: RankInput) {
+    private suspend fun refine(id: Long, input: RankInput, sessionId: Long?) {
         val ranking = ranker.rank(input, allowModel = true)
         if (!ranking.fromModel) return
         val txn = txns.byId(id) ?: return
@@ -125,19 +149,34 @@ class PaymentIngestor @Inject constructor(
                     ?: txn.necessity,
             )
         )
-        announce(id, ranking)
+        mutex.withLock {
+            // Still in the payment app: better buttons for when the prompt goes out.
+            if (sessionId != null && waitingForExit.containsKey(sessionId)) {
+                waitingForExit[sessionId] = id to ranking
+            } else {
+                announce(id, ranking, sessionId)
+            }
+        }
     }
 
-    private suspend fun announce(id: Long, ranking: Ranking) {
+    /**
+     * The prompt, with the amount already in it. Asking-now mode shows it as the
+     * usual heads-up, in the visit's own notification; sort-later keeps it quiet.
+     * Re-posting it (after Haiku re-ranks) never buzzes twice.
+     */
+    private suspend fun announce(id: Long, ranking: Ranking, sessionId: Long?) {
         val txn = txns.byId(id) ?: return
         if (txn.reviewed) return
+        val config = settings.current()
+        val loud = config.captureMode == CaptureMode.ASK_NOW && config.promptsEnabled
         notifier.showLogged(
             transactionId = id,
             amountPaise = txn.amountPaise,
             merchant = txn.merchantName,
             ranked = ranking.categories,
             waiting = txns.unsortedCount(),
-            loud = settings.current().captureMode == CaptureMode.ASK_NOW,
+            loud = loud,
+            sessionId = sessionId.takeIf { loud },
         )
     }
 

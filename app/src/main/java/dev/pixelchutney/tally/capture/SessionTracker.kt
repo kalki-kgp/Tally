@@ -13,6 +13,9 @@ import dev.pixelchutney.tally.data.settings.SettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -26,6 +29,8 @@ data class VisitLink(
     val packageName: String,
     /** Only known for a visit still in progress; otherwise it is in the saved sample. */
     val precededBy: String?,
+    /** Still inside the payment app: the prompt waits until they leave. */
+    val inProgress: Boolean,
 )
 
 /**
@@ -55,7 +60,7 @@ class SessionTracker @Inject constructor(
     private val mutex = Mutex()
 
     private var activePackage: String? = null
-    private var activeSessionId: Long? = null
+    @Volatile private var activeSessionId: Long? = null
     private var activeStartedAt: Long = 0L
     private var exitJob: Job? = null
 
@@ -64,6 +69,16 @@ class SessionTracker @Inject constructor(
      * visit in here needs no prompt: its amount is known and it is saved.
      */
     private val claimed = mutableMapOf<Long, Long>()
+
+    private val _visitsEnded = MutableSharedFlow<Long>(extraBufferCapacity = 16)
+
+    /**
+     * Visits that ended with their payment already read. The prompt for those
+     * goes out on leaving, like every other prompt — see `PaymentIngestor`.
+     */
+    val visitsEndedWithPayment: SharedFlow<Long> = _visitsEnded.asSharedFlow()
+
+    fun isInProgress(sessionId: Long): Boolean = activeSessionId == sessionId
 
     /** Visits waiting a short while for a payment notification before asking. */
     private val graceJobs = mutableMapOf<Long, Job>()
@@ -173,11 +188,12 @@ class SessionTracker @Inject constructor(
         try {
             sessions.markEnded(sessionId, endedAt)
 
-            // The payment notification arrived while the app was still open. It is
-            // saved already; asking "how much?" now would be asking for something
-            // Tally just read.
+            // The payment notification arrived while the app was still open, so the
+            // amount is known. The prompt still goes out now, on leaving — with the
+            // amount filled in instead of asked for.
             if (sessionId in claimed) {
                 Log.d(TAG, "visit to $packageName already has its payment")
+                _visitsEnded.tryEmit(sessionId)
                 return
             }
 
@@ -195,9 +211,13 @@ class SessionTracker @Inject constructor(
             // because a visit can be sorted hours after this process has died.
             metadata.startCapture(sessionId, sessionPrecededBy)
 
-            if (readsPaymentNotifications(config.readPaymentNotifications)) {
-                // Bank texts lag the payment by seconds to a minute. Give one the
-                // chance to arrive before deciding the amount is unknown.
+            // Asking now asks now, exactly as it always did. If the bank's text
+            // lands afterwards, the prompt is rewritten in place with the amount.
+            if (config.captureMode == CaptureMode.SORT_LATER &&
+                readsPaymentNotifications(config.readPaymentNotifications)
+            ) {
+                // Sorting later: nothing is shown, so there is time to wait for a
+                // bank text before filing the visit as "no amount found".
                 graceJobs[sessionId] = scope.launch {
                     delay(NOTIFICATION_GRACE_MS)
                     mutex.withLock {
@@ -241,9 +261,8 @@ class SessionTracker @Inject constructor(
      *
      * The visit still in progress wins — the notification landed while the app
      * was open. Otherwise the most recent unanswered visit that ended in the last
-     * few minutes, preferring one to the app that posted the notification. That
-     * visit then never prompts, and any prompt already showing for it is taken
-     * down: the amount it was asking for has arrived.
+     * few minutes, preferring one to the app that posted the notification. Its
+     * prompt then shows the amount instead of asking for it.
      */
     suspend fun claimForPayment(notifyingPackage: String?, at: Long): VisitLink? = mutex.withLock {
         val now = Time.now()
@@ -253,7 +272,7 @@ class SessionTracker @Inject constructor(
         val activePkg = activePackage
         if (activeId != null && activePkg != null && activeId !in claimed) {
             claimed[activeId] = now
-            return@withLock VisitLink(activeId, activePkg, sessionPrecededBy)
+            return@withLock VisitLink(activeId, activePkg, sessionPrecededBy, inProgress = true)
         }
 
         val candidates = sessions.claimable(at - CLAIM_WINDOW_MS).filter { it.id !in claimed }
@@ -263,8 +282,9 @@ class SessionTracker @Inject constructor(
 
         claimed[pick.id] = now
         graceJobs.remove(pick.id)?.cancel()
-        notifier.cancelPrompt(pick.id)
-        VisitLink(pick.id, pick.packageName, precededBy = null)
+        // Any "how much?" prompt showing for this visit is left in place for the
+        // ingestor to rewrite with the amount — same notification, no flicker.
+        VisitLink(pick.id, pick.packageName, precededBy = null, inProgress = false)
     }
 
     private fun readsPaymentNotifications(enabled: Boolean): Boolean =

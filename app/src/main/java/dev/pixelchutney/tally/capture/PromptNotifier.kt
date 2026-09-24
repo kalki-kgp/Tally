@@ -225,11 +225,15 @@ class PromptNotifier @Inject constructor(
     // ── Read from a payment notification ─────────────────────────────────────
 
     /**
-     * A payment Tally read by itself: the amount is saved, only the category is
-     * open. One notification, replaced by each new payment — older ones are
-     * waiting in "To sort", and a shade full of them is its own kind of nagging.
+     * A payment whose amount Tally read by itself, so only the category is asked.
      *
-     * [loud] is "ask right away" mode: the same notification, as a heads-up.
+     * [loud] is the usual prompt after leaving a payment app — the same heads-up
+     * as always, with the expected amount already in it. It takes over the
+     * visit's own notification, so a "Did you pay?" already showing turns into
+     * this rather than a second one appearing. Tapping it opens the sheet on the
+     * payment, where a wrong amount can be corrected.
+     *
+     * Quiet (sort later) is one silent notification replaced by each new payment.
      */
     fun showLogged(
         transactionId: Long,
@@ -238,25 +242,30 @@ class PromptNotifier @Inject constructor(
         ranked: List<CategoryEntity>,
         waiting: Int,
         loud: Boolean,
+        sessionId: Long? = null,
     ) {
+        val notificationId = if (sessionId != null) notificationIdFor(sessionId) else LOGGED_ID
         val builder = NotificationCompat.Builder(context, if (loud) CHANNEL_CAPTURE else CHANNEL_LOGGED)
             .setSmallIcon(R.drawable.ic_notification)
             .setPriority(if (loud) NotificationCompat.PRIORITY_HIGH else NotificationCompat.PRIORITY_LOW)
-            .setCategory(Notification.CATEGORY_STATUS)
+            .setCategory(if (loud) Notification.CATEGORY_REMINDER else Notification.CATEGORY_STATUS)
             .setOnlyAlertOnce(true)
-            .setAutoCancel(true)
-            .setContentIntent(openInbox())
+            .setAutoCancel(!loud)
+            .setContentIntent(if (loud) editSheet(transactionId) else openInbox())
             .setContentTitle(listOfNotNull(Money.format(amountPaise), merchant).joinToString(" · "))
             .setContentText(
-                if (waiting > 1) "Logged. $waiting payments to sort — tap one, or later."
-                else "Logged. What was it? Tap one, or sort it later."
+                when {
+                    loud -> "Pick a category to save it. Tap to fix the amount."
+                    waiting > 1 -> "Logged. $waiting payments to sort — tap one, or later."
+                    else -> "Logged. What was it? Tap one, or sort it later."
+                }
             )
 
         ranked.take(2).forEach { category ->
             builder.addAction(
                 0,
                 "${category.emoji} ${category.name}",
-                sortBroadcast(transactionId, ACTION_SORT, categoryId = category.id),
+                sortBroadcast(transactionId, notificationId, ACTION_SORT, categoryId = category.id),
             )
         }
         val categoryInput = RemoteInput.Builder(KEY_CATEGORY)
@@ -268,17 +277,17 @@ class PromptNotifier @Inject constructor(
             NotificationCompat.Action.Builder(
                 0,
                 "Other…",
-                sortBroadcast(transactionId, ACTION_SORT, mutable = true),
+                sortBroadcast(transactionId, notificationId, ACTION_SORT, mutable = true),
             )
                 .addRemoteInput(categoryInput)
                 .setAllowGeneratedReplies(false)
                 .build()
         )
-        runCatching { manager.notify(LOGGED_ID, builder.build()) }
+        runCatching { manager.notify(notificationId, builder.build()) }
     }
 
     /** Sorted from the shade. The note is still the most useful thing to add. */
-    fun confirmSorted(transactionId: Long, amountPaise: Long, categoryLabel: String) {
+    fun confirmSorted(notificationId: Int, transactionId: Long, amountPaise: Long, categoryLabel: String) {
         val noteInput = RemoteInput.Builder(KEY_NOTE).setLabel("What was it for?").build()
         val builder = NotificationCompat.Builder(context, CHANNEL_LOGGED)
             .setSmallIcon(R.drawable.ic_notification)
@@ -292,23 +301,23 @@ class PromptNotifier @Inject constructor(
                 NotificationCompat.Action.Builder(
                     0,
                     "Add note",
-                    sortBroadcast(transactionId, ACTION_SORT_NOTE, mutable = true),
+                    sortBroadcast(transactionId, notificationId, ACTION_SORT_NOTE, mutable = true),
                 )
                     .addRemoteInput(noteInput)
                     .setAllowGeneratedReplies(false)
                     .build()
             )
-        runCatching { manager.notify(LOGGED_ID, builder.build()) }
+        runCatching { manager.notify(notificationId, builder.build()) }
     }
 
-    fun showSortedNote(amountPaise: Long, note: String) {
+    fun showSortedNote(notificationId: Int, amountPaise: Long, note: String) {
         val builder = NotificationCompat.Builder(context, CHANNEL_LOGGED)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Saved ${Money.format(amountPaise)}")
             .setContentText(note)
             .setAutoCancel(true)
             .setTimeoutAfter(4_000)
-        runCatching { manager.notify(LOGGED_ID, builder.build()) }
+        runCatching { manager.notify(notificationId, builder.build()) }
     }
 
     /** Clears the logged notification once what it shows has been sorted elsewhere. */
@@ -323,8 +332,16 @@ class PromptNotifier @Inject constructor(
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
+    private fun editSheet(transactionId: Long): PendingIntent = PendingIntent.getActivity(
+        context,
+        (transactionId % Int.MAX_VALUE).toInt(),
+        CaptureActivity.editIntent(context, transactionId),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
     private fun sortBroadcast(
         transactionId: Long,
+        notificationId: Int,
         action: String,
         categoryId: Long? = null,
         mutable: Boolean = false,
@@ -332,6 +349,7 @@ class PromptNotifier @Inject constructor(
         val intent = Intent(context, CaptureActionReceiver::class.java).apply {
             this.action = action
             putExtra(CaptureActionReceiver.EXTRA_TRANSACTION_ID, transactionId)
+            putExtra(CaptureActionReceiver.EXTRA_NOTIFICATION_ID, notificationId)
             categoryId?.let { putExtra(CaptureActionReceiver.EXTRA_CATEGORY_ID, it) }
         }
         val requestCode = (transactionId.toInt() * 131) + action.hashCode() + (categoryId?.toInt() ?: 0)

@@ -38,11 +38,15 @@ not for a general audience.
   `plan.md` §12.
 - **The AI layer uses Haiku** (`claude-haiku-4-5-20251001`) for both fast and
   smart paths.
-- **Sort later is the default.** The owner stopped using Tally after 3–4 days
-  because answering a prompt after every payment was tiring. Amounts are now read
-  from payment notifications and saved at once (`reviewed = false`); the owner
-  says what they were for later, in "To sort". Heads-up prompts are the
-  "Sort later" switch turned off. Do not make interrupting the default again.
+- **The prompt after leaving a payment app stays, and is the default.** When a
+  payment notification was read, the prompt shows the expected amount and asks
+  only for the category (`PromptNotifier.showLogged`, in the visit's own
+  notification id, so an earlier "Did you pay?" is rewritten in place rather than
+  duplicated). A payment read mid-visit waits for the visit to end before it
+  prompts. The amount is saved the moment it is read (`reviewed = false`), so an
+  unanswered prompt still leaves it in "To sort". "Sort later" (no prompts) is an
+  opt-in switch. The owner asked for exactly this after the prompts were briefly
+  made opt-in: do not remove or silence the prompt by default.
 - **Notification reading is back, at the owner's request** (it was removed in v2,
   also at their request). `PaymentNotificationListener` reads UPI apps, known bank
   apps and bank texts from the SMS app — never a chat (MessagingStyle) from a

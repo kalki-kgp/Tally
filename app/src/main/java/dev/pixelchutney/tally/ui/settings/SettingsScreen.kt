@@ -194,9 +194,10 @@ fun SettingsScreen(
                 ToggleRow(
                     label = "Sort later",
                     description = if (state.config.captureMode == CaptureMode.SORT_LATER) {
-                        "Payments are logged quietly and wait in To sort. Nothing pops up."
+                        "No prompts. Payments are logged quietly and wait in To sort."
                     } else {
-                        "Off: a heads-up after every payment, as before."
+                        "Off: the usual prompt after each payment, with the amount filled in " +
+                            "when Tally read it."
                     },
                     checked = state.config.captureMode == CaptureMode.SORT_LATER,
                     onChange = viewModel::setSortLater,

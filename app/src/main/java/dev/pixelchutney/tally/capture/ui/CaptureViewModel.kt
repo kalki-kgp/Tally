@@ -79,14 +79,19 @@ class CaptureViewModel @Inject constructor(
             repository.ensureSeeded()
             val categories = repository.allCategories().filter { !it.archived }
 
+            // A visit whose payment a notification already saved is that payment:
+            // open it for correcting rather than starting a duplicate.
+            val linkedId = sessionId?.let { sessions.byId(it)?.linkedTransactionId }
+            val editing = editingId ?: linkedId
+
             // Correcting an existing entry: load it and stop, nothing to guess.
-            if (editingId != null) {
-                val existing = repository.byId(editingId)
+            if (editing != null) {
+                val existing = repository.byId(editing)
                 if (existing != null) {
                     _state.update {
                         it.copy(
                             categories = categories,
-                            editingId = editingId,
+                            editingId = editing,
                             amountEntry = Money.toEntry(existing.amountPaise),
                             negative = existing.amountPaise < 0,
                             selectedCategoryId = existing.categoryId,
@@ -258,6 +263,8 @@ class CaptureViewModel @Inject constructor(
                             reviewed = true,
                         )
                     )
+                    // Opened from a prompt that already showed this payment's amount.
+                    existing.sessionId?.let { notifier.cancelPrompt(it) }
                 }
                 _state.update { it.copy(saving = false, saved = true) }
                 onDone()

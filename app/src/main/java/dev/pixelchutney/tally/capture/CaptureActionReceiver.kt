@@ -101,6 +101,25 @@ class CaptureActionReceiver : BroadcastReceiver() {
             return
         }
 
+        // The bank's text already saved this payment. What was typed is the
+        // owner's own figure, so it wins; the prompt carries on from that row
+        // instead of starting a second one.
+        session.linkedTransactionId?.let { linkedId ->
+            repository.byId(linkedId)?.let { txn ->
+                if (txn.amountPaise != paise) repository.update(txn.copy(amountPaise = paise))
+                notifier.showLogged(
+                    transactionId = linkedId,
+                    amountPaise = paise,
+                    merchant = txn.merchantName,
+                    ranked = orderedCategories(),
+                    waiting = 0,
+                    loud = true,
+                    sessionId = sessionId,
+                )
+                return
+            }
+        }
+
         sessions.update(session.copy(parsedAmountPaise = paise))
         notifier.askForCategory(sessionId, packageName, paise, orderedCategories())
     }
@@ -131,6 +150,25 @@ class CaptureActionReceiver : BroadcastReceiver() {
                 notifier.askForCategory(sessionId, packageName, amount, available)
             }
             return
+        }
+
+        // Saved from a payment notification in the meantime: file that row
+        // rather than saving the same payment twice.
+        session.linkedTransactionId?.let { linkedId ->
+            val existing = repository.byId(linkedId)
+            if (existing != null) {
+                if (existing.amountPaise != amount) repository.update(existing.copy(amountPaise = amount))
+                repository.sort(linkedId, category.id, note = null)
+                tracker.recordLogged(packageName)
+                notifier.confirmSaved(
+                    sessionId = sessionId,
+                    packageName = packageName,
+                    transactionId = linkedId,
+                    amountPaise = amount,
+                    categoryLabel = "${category.emoji} ${category.name}",
+                )
+                return
+            }
         }
 
         val transactionId = repository.save(
@@ -179,6 +217,7 @@ class CaptureActionReceiver : BroadcastReceiver() {
     }
 
     private suspend fun onSort(intent: Intent, transactionId: Long) {
+        val notificationId = intent.getIntExtra(EXTRA_NOTIFICATION_ID, PromptNotifier.LOGGED_ID)
         val txn = repository.byId(transactionId) ?: return
         val available = categories.all().filter { !it.archived }
         val tapped = intent.getLongExtra(EXTRA_CATEGORY_ID, -1L).takeIf { it > 0 }
@@ -199,12 +238,14 @@ class CaptureActionReceiver : BroadcastReceiver() {
                 ranked = listOfNotNull(available.firstOrNull { it.id == txn.categoryId }) +
                     available.filter { it.id != txn.categoryId },
                 waiting = 0,
-                loud = false,
+                loud = notificationId != PromptNotifier.LOGGED_ID,
+                sessionId = txn.sessionId?.takeIf { notificationId != PromptNotifier.LOGGED_ID },
             )
             return
         }
         repository.sort(transactionId, category.id, note = null)
-        notifier.confirmSorted(transactionId, txn.amountPaise, "${category.emoji} ${category.name}")
+        txn.sourceApp?.let { tracker.recordLogged(it) }
+        notifier.confirmSorted(notificationId, transactionId, txn.amountPaise, "${category.emoji} ${category.name}")
     }
 
     private suspend fun onSortNote(intent: Intent, transactionId: Long) {
@@ -212,7 +253,11 @@ class CaptureActionReceiver : BroadcastReceiver() {
             ?.getCharSequence(PromptNotifier.KEY_NOTE)?.toString()?.trim()
         val txn = repository.byId(transactionId) ?: return
         if (!note.isNullOrBlank()) repository.update(txn.copy(note = note))
-        notifier.showSortedNote(txn.amountPaise, note.orEmpty())
+        notifier.showSortedNote(
+            intent.getIntExtra(EXTRA_NOTIFICATION_ID, PromptNotifier.LOGGED_ID),
+            txn.amountPaise,
+            note.orEmpty(),
+        )
     }
 
     /** Most-used first, so the two buttons that fit are usually the right ones. */
@@ -232,5 +277,6 @@ class CaptureActionReceiver : BroadcastReceiver() {
         const val EXTRA_PACKAGE = "package"
         const val EXTRA_CATEGORY_ID = "category_id"
         const val EXTRA_TRANSACTION_ID = "transaction_id"
+        const val EXTRA_NOTIFICATION_ID = "notification_id"
     }
 }

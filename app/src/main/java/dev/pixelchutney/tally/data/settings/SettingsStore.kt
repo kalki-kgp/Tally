@@ -21,16 +21,16 @@ enum class ThemeMode { SYSTEM, LIGHT, DARK }
 /**
  * What happens after a payment.
  *
- * Asking at the till was the original design, and it is what made Tally tiring
- * enough to stop using after a few days. With amounts read from notifications
- * the question at the till is no longer "how much", only "what for" — and that
- * can wait until there is time for it.
+ * The prompt on leaving a payment app is the default and stays that way — the
+ * owner wants it. What changed is that it no longer has to ask "how much": when a
+ * payment notification was read, the prompt arrives with the amount filled in,
+ * and only the category is left. Anything not answered waits in "To sort".
  */
 enum class CaptureMode {
-    /** Payments are logged quietly and wait in "To sort". Nothing interrupts. */
-    SORT_LATER,
-    /** A heads-up notification after every payment, as before. */
+    /** A heads-up after every payment, amount filled in when it was read. */
     ASK_NOW,
+    /** Nothing pops up; payments are logged quietly and wait in "To sort". */
+    SORT_LATER,
 }
 
 data class TallySettings(
@@ -49,7 +49,7 @@ data class TallySettings(
     val lastDigestAt: Long = 0L,
     val lastBackupAt: Long = 0L,
     val onboardingDone: Boolean = false,
-    val captureMode: CaptureMode = CaptureMode.SORT_LATER,
+    val captureMode: CaptureMode = CaptureMode.ASK_NOW,
     /** Read amounts from UPI app notifications and bank texts. */
     val readPaymentNotifications: Boolean = true,
 )
@@ -97,8 +97,8 @@ class SettingsStore @Inject constructor(
         lastDigestAt = this[Keys.LAST_DIGEST] ?: 0L,
         lastBackupAt = this[Keys.LAST_BACKUP] ?: 0L,
         onboardingDone = this[Keys.ONBOARDED] ?: false,
-        captureMode = runCatching { CaptureMode.valueOf(this[Keys.CAPTURE_MODE] ?: "SORT_LATER") }
-            .getOrDefault(CaptureMode.SORT_LATER),
+        captureMode = runCatching { CaptureMode.valueOf(this[Keys.CAPTURE_MODE] ?: "ASK_NOW") }
+            .getOrDefault(CaptureMode.ASK_NOW),
         readPaymentNotifications = this[Keys.READ_NOTIFICATIONS] ?: true,
     )
 
