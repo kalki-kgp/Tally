@@ -7,7 +7,6 @@ import dev.pixelchutney.tally.data.db.AiDao
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -30,6 +29,11 @@ data class ParsedPayment(
 
 sealed interface Extraction {
     data class Payment(val payment: ParsedPayment) : Extraction
+    /**
+     * Money came in. Paying yourself shows up this way — Navi announces the
+     * receiving side — so the amount is still worth offering, never saving.
+     */
+    data class Incoming(val payment: ParsedPayment) : Extraction
     /** Read, and it is not money going out: a credit, OTP, offer, reminder… */
     data object NotAPayment : Extraction
     /** Could not ask right now — offline, rate limited. Worth trying again. */
@@ -61,11 +65,11 @@ class PaymentExtractor @Inject constructor(
 
     suspend fun extract(sourceApp: String, title: String, body: String): Extraction {
         val prompt = buildString {
-            appendLine("App that posted it: $sourceApp")
+            appendLine("Payment app that posted it: $sourceApp")
             appendLine("Title: ${title.ifBlank { "(none)" }}")
             appendLine("Text: ${body.ifBlank { "(none)" }}")
         }
-        val cacheKey = "pay:" + sha1(prompt)
+        val cacheKey = "pay2:" + sha1(prompt)
         aiDao.cached(cacheKey)?.response?.let { cached -> read(cached)?.let { return it } }
 
         val result = claude.send(
@@ -92,15 +96,13 @@ class PaymentExtractor @Inject constructor(
 
     private fun read(reply: String): Extraction? {
         val obj = runCatching { json.parseToJsonElement(reply).jsonObject }.getOrNull() ?: return null
-        val outgoing = obj["is_outgoing_payment"]?.jsonPrimitive?.booleanOrNull ?: return null
-        if (!outgoing) return Extraction.NotAPayment
-
         fun field(name: String) = obj[name]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+        val direction = field("direction") ?: return null
+        if (direction == "none") return Extraction.NotAPayment
         val paise = field("amount")?.let(Money::fromRupeeString)?.takeIf { it > 0 }
             ?: return Extraction.NotAPayment
-        return Extraction.Payment(
-            ParsedPayment(amountPaise = paise, payee = field("payee"), upiRef = field("reference"))
-        )
+        val payment = ParsedPayment(amountPaise = paise, payee = field("payee"), upiRef = field("reference"))
+        return if (direction == "outgoing") Extraction.Payment(payment) else Extraction.Incoming(payment)
     }
 
     private fun sha1(text: String): String =
@@ -109,27 +111,30 @@ class PaymentExtractor @Inject constructor(
 
     private companion object {
         const val SYSTEM =
-            "You read one notification from an Indian phone — from a UPI app, a bank app, or a " +
-                "bank's SMS — and decide whether it reports that money has just LEFT the owner's " +
-                "account, card or wallet: a completed debit, UPI payment, card spend, transfer or " +
-                "withdrawal. Say no for money coming in (credits, refunds, cashback), OTPs and " +
-                "verification codes, payment requests or collect requests, failed, declined, pending " +
-                "or reversed payments, future or scheduled debits, bill or due-date reminders, " +
-                "balance updates, offers and ads. When it is a payment, give the amount exactly as " +
-                "written in rupees (digits and at most one decimal point, no symbols or commas), " +
-                "who it was paid to as written (a name or UPI ID), and the UPI or bank reference " +
-                "number if one is given. Use empty strings for anything not stated."
+            "You read one notification posted by an Indian UPI payment app and decide whether it " +
+                "reports a completed transaction. direction is \"outgoing\" when money has just " +
+                "left the owner (paid, sent, debited, spent), \"incoming\" when money has just " +
+                "arrived (received, credited, deposited, refunded), and \"none\" for everything " +
+                "else: OTPs, payment or collect requests, failed, declined, pending or reversed " +
+                "payments, future or scheduled debits, reminders, balance updates, offers and ads. " +
+                "For a transaction, give the amount exactly as written in rupees (digits and at " +
+                "most one decimal point, no symbols or commas), the other party as written (a name " +
+                "or UPI ID), and the UPI reference number if one is given. Use empty strings for " +
+                "anything not stated."
 
         val SCHEMA: JsonObject = buildJsonObject {
             put("type", "object")
             putJsonObject("properties") {
-                putJsonObject("is_outgoing_payment") { put("type", "boolean") }
+                putJsonObject("direction") {
+                    put("type", "string")
+                    putJsonArray("enum") { listOf("outgoing", "incoming", "none").forEach { add(JsonPrimitive(it)) } }
+                }
                 putJsonObject("amount") { put("type", "string") }
                 putJsonObject("payee") { put("type", "string") }
                 putJsonObject("reference") { put("type", "string") }
             }
             putJsonArray("required") {
-                listOf("is_outgoing_payment", "amount", "payee", "reference").forEach { add(JsonPrimitive(it)) }
+                listOf("direction", "amount", "payee", "reference").forEach { add(JsonPrimitive(it)) }
             }
             put("additionalProperties", false)
         }

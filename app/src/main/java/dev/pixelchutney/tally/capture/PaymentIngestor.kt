@@ -38,6 +38,7 @@ class PaymentIngestor @Inject constructor(
     private val repository: TallyRepository,
     private val txns: TransactionDao,
     private val tracker: SessionTracker,
+    private val sessions: dev.pixelchutney.tally.data.db.SessionDao,
     private val metadata: MetadataCollector,
     private val ranker: CategoryRanker,
     private val notifier: PromptNotifier,
@@ -51,18 +52,60 @@ class PaymentIngestor @Inject constructor(
      * prompt goes out when the visit ends — the same moment it always has — not
      * while the person is still looking at the payment screen.
      */
-    private val waitingForExit = mutableMapOf<Long, Pair<Long, Ranking>>()
+    private val waitingForExit = mutableMapOf<Long, suspend () -> Unit>()
 
     init {
         scope.launch {
             tracker.visitsEndedWithPayment.collect { sessionId ->
                 mutex.withLock {
-                    waitingForExit.remove(sessionId)?.let { (id, ranking) ->
-                        runCatching { announce(id, ranking, sessionId) }
-                    }
+                    waitingForExit.remove(sessionId)?.let { prompt -> runCatching { prompt() } }
                 }
             }
         }
+    }
+
+    /**
+     * An amount the payment app announced as money *coming in* — which is how
+     * Navi shows a payment to your own other account. It only fills the prompt
+     * for the visit it belongs to; nothing is saved until a category is tapped,
+     * so a real incoming payment costs one "No payment" and never lands as spend.
+     */
+    suspend fun offer(payment: ParsedPayment, notifyingPackage: String, postedAt: Long) = mutex.withLock {
+        val visit = tracker.claimForPayment(notifyingPackage, postedAt, samePackageOnly = true)
+            ?: return@withLock
+        sessions.byId(visit.sessionId)?.let {
+            sessions.update(it.copy(parsedAmountPaise = payment.amountPaise))
+        }
+        val prompt: suspend () -> Unit = { promptWithAmount(visit.sessionId, notifyingPackage, payment, postedAt) }
+        if (visit.inProgress && tracker.isInProgress(visit.sessionId)) {
+            waitingForExit[visit.sessionId] = prompt
+        } else {
+            prompt()
+        }
+    }
+
+    /** The usual "what for?" step, with the amount already in it. */
+    private suspend fun promptWithAmount(
+        sessionId: Long,
+        packageName: String,
+        payment: ParsedPayment,
+        at: Long,
+    ) {
+        val config = settings.current()
+        if (config.captureMode != CaptureMode.ASK_NOW || !config.promptsEnabled) return
+        val ranking = ranker.rank(
+            RankInput(
+                amountPaise = payment.amountPaise,
+                timestamp = at,
+                sourceApp = packageName,
+                payee = null,
+                merchantName = null,
+                note = null,
+                context = metadata.consume(sessionId),
+            ),
+            allowModel = false,
+        )
+        notifier.askForCategory(sessionId, packageName, payment.amountPaise, ranking.categories)
     }
 
     /**
@@ -127,7 +170,7 @@ class PaymentIngestor @Inject constructor(
 
         val sessionId = visit?.sessionId
         if (sessionId != null && visit.inProgress && tracker.isInProgress(sessionId)) {
-            waitingForExit[sessionId] = id to local
+            waitingForExit[sessionId] = { announce(id, local, sessionId) }
         } else {
             announce(id, local, sessionId)
         }
@@ -153,7 +196,7 @@ class PaymentIngestor @Inject constructor(
         mutex.withLock {
             // Still in the payment app: better buttons for when the prompt goes out.
             if (sessionId != null && waitingForExit.containsKey(sessionId)) {
-                waitingForExit[sessionId] = id to ranking
+                waitingForExit[sessionId] = { announce(id, ranking, sessionId) }
             } else {
                 announce(id, ranking, sessionId)
             }

@@ -264,20 +264,27 @@ class SessionTracker @Inject constructor(
      * few minutes, preferring one to the app that posted the notification. Its
      * prompt then shows the amount instead of asking for it.
      */
-    suspend fun claimForPayment(notifyingPackage: String?, at: Long): VisitLink? = mutex.withLock {
+    suspend fun claimForPayment(
+        notifyingPackage: String?,
+        at: Long,
+        /** Only a visit to [notifyingPackage] itself — for amounts that are only offered. */
+        samePackageOnly: Boolean = false,
+    ): VisitLink? = mutex.withLock {
         val now = Time.now()
         claimed.entries.removeAll { now - it.value > CLAIM_MEMORY_MS }
 
         val activeId = activeSessionId
         val activePkg = activePackage
-        if (activeId != null && activePkg != null && activeId !in claimed) {
+        if (activeId != null && activePkg != null && activeId !in claimed &&
+            (!samePackageOnly || activePkg == notifyingPackage)
+        ) {
             claimed[activeId] = now
             return@withLock VisitLink(activeId, activePkg, sessionPrecededBy, inProgress = true)
         }
 
         val candidates = sessions.claimable(at - CLAIM_WINDOW_MS).filter { it.id !in claimed }
         val pick = candidates.firstOrNull { it.packageName == notifyingPackage }
-            ?: candidates.firstOrNull()
+            ?: candidates.firstOrNull()?.takeIf { !samePackageOnly }
             ?: return@withLock null
 
         claimed[pick.id] = now

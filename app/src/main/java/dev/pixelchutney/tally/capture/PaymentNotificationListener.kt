@@ -19,9 +19,9 @@ import javax.inject.Inject
 /**
  * Reads the amount out of payment notifications, so it never has to be typed.
  *
- * Listens to three kinds of sender and nothing else: the watched UPI apps, bank
- * apps, and the SMS app — where every Indian bank texts a debit within seconds.
- * The bank text is the one that always arrives, whichever app paid.
+ * Listens to the payment apps and nothing else — the watched list plus the
+ * known UPI apps. The owner asked for exactly this: the payment app's own
+ * notification is the one that reliably arrives; bank texts often do not.
  *
  * This is a notification listener, not an accessibility service. The payment apps
  * that refuse to work alongside accessibility services (Navi, CRED) check for
@@ -29,8 +29,7 @@ import javax.inject.Inject
  *
  * Reading is done by Haiku (`PaymentExtractor`), not by patterns: bank wording
  * varies too much for hand-written rules to keep up. What reaches the model is
- * gated by *who sent it*, never by what it says — a payment app, a bank app, or
- * a text from a bank's sender ID. Texts from people never leave the phone.
+ * gated by *who sent it* — a payment app — never by what it says.
  * Anything that is not money going out is dropped on the spot and never stored.
  */
 @AndroidEntryPoint
@@ -66,31 +65,27 @@ class PaymentNotificationListener : NotificationListenerService() {
         val notification = posted.notification ?: return
         if (notification.flags and Notification.FLAG_GROUP_SUMMARY != 0) return
 
-        // Cheap reject before touching the extras: most notifications on a phone
-        // come from apps this could never be interested in.
-        val kind = KNOWN_KIND[pkg] ?: if (pkg in watched) Kind.PAYMENT_APP else return
+        // Only the payment apps' own notifications. Bank texts and bank apps were
+        // read once and dropped at the owner's request: they do not always come,
+        // and the payment app's notification is the one that does.
+        if (pkg !in PAYMENT_APPS && pkg !in watched) return
 
         val text = textOf(notification)
         // A conversation in a payment app is people talking — "paid ₹500 for the
-        // cab" in a WhatsApp chat is a message, not a payment. Only the SMS app's
-        // conversations are read, and those pass the bank-sender check below.
-        if (text.conversation && kind != Kind.SMS) return
+        // cab" in a WhatsApp chat is a message, not a payment.
+        if (text.conversation) return
         val title = text.title
         val body = text.body
         val postedAt = posted.postTime
 
         scope.launch {
-            runCatching { handle(pkg, kind, title, body, postedAt) }
+            runCatching { handle(pkg, title, body, postedAt) }
                 .onFailure { Log.w(TAG, "could not read a notification from $pkg", it) }
         }
     }
 
-    private suspend fun handle(pkg: String, kind: Kind, title: String, body: String, postedAt: Long) {
+    private suspend fun handle(pkg: String, title: String, body: String, postedAt: Long) {
         if (!settings.current().readPaymentNotifications) return
-        val isPaymentApp = kind == Kind.PAYMENT_APP
-
-        // Texts from people are never sent anywhere — only bank sender IDs.
-        if (kind == Kind.SMS && !looksLikeBankSender(title)) return
         // No digit, no amount: not worth a call.
         if ((title + body).none { it.isDigit() }) return
 
@@ -109,8 +104,13 @@ class PaymentNotificationListener : NotificationListenerService() {
                         payment = result.payment,
                         notifyingPackage = pkg,
                         postedAt = postedAt,
-                        fromPaymentApp = isPaymentApp,
+                        fromPaymentApp = true,
                     )
+                    return
+                }
+                is Extraction.Incoming -> {
+                    lastProblem = null
+                    ingestor.offer(result.payment, pkg, postedAt)
                     return
                 }
                 Extraction.NotAPayment -> return
@@ -127,18 +127,7 @@ class PaymentNotificationListener : NotificationListenerService() {
     }
 
     /**
-     * Banks text from sender IDs — "BP-HDFCBK-S", "JK-UNIONB-T" — never from a
-     * contact name or a phone number. This decides only what may be read, not
-     * what it says.
-     */
-    private fun looksLikeBankSender(title: String): Boolean {
-        val sender = title.trim()
-        return SENDER_ID.matches(sender) && sender.none { it.isLowerCase() }
-    }
-
-    /**
-     * Title and body. SMS apps post a conversation, whose text field is a summary
-     * of several messages; the newest message is the one that just arrived.
+     * Title and body, and whether it is a conversation (a chat, never a payment).
      */
     private class NotificationText(val title: String, val body: String, val conversation: Boolean)
 
@@ -156,14 +145,11 @@ class PaymentNotificationListener : NotificationListenerService() {
         return NotificationText(title, body, conversation = messaging != null)
     }
 
-    private enum class Kind { PAYMENT_APP, BANK_APP, SMS }
-
     companion object {
         private const val TAG = "PaymentListener"
 
         private const val RETRIES = 2
         private const val RETRY_DELAY_MS = 8_000L
-        private val SENDER_ID = Regex("[A-Z0-9]{2}-[A-Z0-9]{3,10}(?:-[A-Z])?|[A-Z]{5,10}")
 
         /**
          * Why the last payment notification could not be read, or null when the
@@ -177,23 +163,11 @@ class PaymentNotificationListener : NotificationListenerService() {
         @Volatile var connected: Boolean = false
             private set
 
-        private val KNOWN_KIND: Map<String, Kind> = buildMap {
-            listOf(
-                "com.google.android.apps.nbu.paisa.user", "com.phonepe.app", "net.one97.paytm",
-                "com.dreamplug.androidapp", "in.org.npci.upiapp", "com.naviapp",
-                "money.super.payments", "com.hdfcbank.payzapp",
-                "in.amazon.mShop.android.shopping", "com.mobikwik_new", "com.freecharge.android",
-            ).forEach { put(it, Kind.PAYMENT_APP) }
-            listOf(
-                "com.snapwork.hdfc", "com.csam.icici.bank.imobile", "com.sbi.lotusintouch",
-                "com.axis.mobile", "com.msf.kbank.mobile", "com.idfcfirstbank.optimus",
-                "com.epifi.paisa", "money.jupiter",
-            ).forEach { put(it, Kind.BANK_APP) }
-            listOf(
-                "com.google.android.apps.messaging", "com.samsung.android.messaging",
-                "com.android.mms", "com.android.messaging", "com.oneplus.mms",
-                "com.truecaller",
-            ).forEach { put(it, Kind.SMS) }
-        }
+        private val PAYMENT_APPS: Set<String> = setOf(
+            "com.google.android.apps.nbu.paisa.user", "com.phonepe.app", "net.one97.paytm",
+            "com.dreamplug.androidapp", "in.org.npci.upiapp", "com.naviapp",
+            "money.super.payments", "com.hdfcbank.payzapp",
+            "in.amazon.mShop.android.shopping", "com.mobikwik_new", "com.freecharge.android",
+        )
     }
 }

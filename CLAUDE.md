@@ -48,10 +48,16 @@ not for a general audience.
   opt-in switch. The owner asked for exactly this after the prompts were briefly
   made opt-in: do not remove or silence the prompt by default.
 - **Notification reading is back, at the owner's request** (it was removed in v2,
-  also at their request). `PaymentNotificationListener` reads UPI apps, known bank
-  apps and bank texts from the SMS app — never a chat (MessagingStyle) from a
-  payment app, and SMS only from a bank sender ID. It is a notification listener,
-  not an accessibility service; the Navi/CRED rule above is untouched.
+  also at their request). `PaymentNotificationListener` reads **only the payment
+  apps' own notifications** (watched apps + known UPI apps) — never bank texts or
+  bank apps, which the owner said do not reliably arrive; never a chat
+  (MessagingStyle). It is a notification listener, not an accessibility service;
+  the Navi/CRED rule above is untouched.
+- **Incoming amounts are offered, never saved.** Paying your own other account
+  makes Navi post "Received ₹1 … deposited in your SBI account". An amount the
+  payment app reports as *incoming*, during or just after a visit to that same
+  app, fills the prompt (`PaymentIngestor.offer` → `askForCategory`); nothing is
+  saved until a category is tapped. Only *outgoing* amounts are saved on read.
 - **Amounts are extracted by Haiku (`ai/PaymentExtractor`), never by patterns.**
   The owner asked for this explicitly after a regex parser missed their real bank
   wording ("Debited Rs:237.00", "A transaction of Rs. 138.43 was made using your
