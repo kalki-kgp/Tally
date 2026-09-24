@@ -273,9 +273,16 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { settings.setAiMonthlyCap(paise) }
     }
 
+    /**
+     * Adding a key is the decision to use AI, so it switches AI on. Leaving the
+     * switch off after a key was saved looked exactly like broken amount-reading:
+     * the key was there and nothing happened.
+     */
     fun saveApiKey(key: String) {
         secrets.apiKey = key.trim()
-        message.value = UiMessage(if (secrets.hasKey()) "API key saved." else "API key cleared.")
+        val saved = secrets.hasKey()
+        if (saved) viewModelScope.launch { settings.setAiEnabled(true) }
+        message.value = UiMessage(if (saved) "API key saved. AI is on." else "API key cleared.")
         refresh()
     }
 

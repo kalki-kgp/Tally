@@ -408,8 +408,9 @@ private fun AiSection(state: SettingsUiState, viewModel: SettingsViewModel) {
 
     SectionCard("AI") {
         Text(
-            "Off by default. Nothing leaves the phone until you add a key and turn this on, " +
-                "and even then only totals and merchant names are sent — never your full history.",
+            "Nothing leaves the phone until you add a key. Then Haiku reads payment " +
+                "notifications and bank texts for the amount, and sorts categories from totals, " +
+                "merchant names and your notes — never your full history or exact location.",
             style = MaterialTheme.typography.bodySmall,
             color = colors.graphite,
         )
