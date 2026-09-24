@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="tally_canvas">#F2EEE4</color>
+    <color name="tally_ink">#191612</color>
+    <color name="tally_amber">#E39B2E</color>
+    <color name="ic_launcher_background">#191612</color>
+</resources>

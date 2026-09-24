@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Tally</string>
+    <string name="widget_label">Tally · Today</string>
+    <string name="widget_description">Today\'s spending and a shortcut to log a payment.</string>
+</resources>
