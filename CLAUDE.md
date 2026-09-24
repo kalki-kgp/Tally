@@ -10,6 +10,10 @@ not for a general audience.
 - **Ship release APKs**, debug-signed for sideloading. Never hand over a debug build.
 - **R8 / minification stays off** until the app is feature-complete. This is a
   deliberate instruction from the owner; do not enable it to solve a size problem.
+- **Every APK built gets a new version.** Bump `versionCode` (and `versionName`)
+  in `version.properties` before any `assembleRelease` that is handed over or
+  published — never rebuild under a version the phone may already have.
+  `scripts/release.sh` does this itself; an ad-hoc build must do it by hand.
 - **Zip the APK before delivering it.** A 27 MB upload times out; ~10 MB does not.
 - **Releases go out with `scripts/release.sh <versionName> "<notes>"`**, built on
   this Mac. It bumps `version.properties`, builds, checks the APK is signed with
