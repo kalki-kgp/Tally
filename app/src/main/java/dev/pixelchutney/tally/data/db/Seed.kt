@@ -34,7 +34,11 @@ object Seed {
         WatchedAppEntity(packageName = "net.one97.paytm", label = "Paytm"),
         WatchedAppEntity(packageName = "com.dreamplug.androidapp", label = "CRED"),
         WatchedAppEntity(packageName = "in.org.npci.upiapp", label = "BHIM"),
-        WatchedAppEntity(packageName = "com.navi.android", label = "Navi"),
+        // Verified on the owner's phone (2026-09-25). The earlier guess,
+        // com.navi.android, matched nothing, so Navi visits were never seen.
+        WatchedAppEntity(packageName = "com.naviapp", label = "Navi"),
+        WatchedAppEntity(packageName = "money.super.payments", label = "super.money"),
+        WatchedAppEntity(packageName = "com.hdfcbank.payzapp", label = "PayZapp"),
         WatchedAppEntity(packageName = "in.amazon.mShop.android.shopping", label = "Amazon Pay"),
         WatchedAppEntity(packageName = "com.mobikwik_new", label = "MobiKwik"),
         WatchedAppEntity(packageName = "com.freecharge.android", label = "Freecharge"),

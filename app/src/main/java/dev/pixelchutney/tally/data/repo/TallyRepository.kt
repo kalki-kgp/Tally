@@ -64,7 +64,10 @@ class TallyRepository @Inject constructor(
 
     suspend fun ensureSeeded() {
         if (categories.count() == 0) categories.insertAll(Seed.categories)
-        if (watchedApps.count() == 0) watchedApps.insertAll(Seed.watchedApps)
+        // Every launch, not only the first: an app added to the seed list later
+        // reaches existing installs too. IGNORE keeps any row already there, so
+        // an app switched off in Settings stays off.
+        watchedApps.insertAll(Seed.watchedApps)
     }
 
     // ── Saving ────────────────────────────────────────────────────────────────

@@ -129,7 +129,8 @@ class PaymentNotificationListener : NotificationListenerService() {
         private val KNOWN_KIND: Map<String, Kind> = buildMap {
             listOf(
                 "com.google.android.apps.nbu.paisa.user", "com.phonepe.app", "net.one97.paytm",
-                "com.dreamplug.androidapp", "in.org.npci.upiapp", "com.navi.android",
+                "com.dreamplug.androidapp", "in.org.npci.upiapp", "com.naviapp",
+                "money.super.payments", "com.hdfcbank.payzapp",
                 "in.amazon.mShop.android.shopping", "com.mobikwik_new", "com.freecharge.android",
             ).forEach { put(it, Kind.PAYMENT_APP) }
             listOf(
