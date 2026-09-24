@@ -19,6 +19,8 @@ not for a general audience.
   this Mac. It bumps `version.properties`, builds, checks the APK is signed with
   `~/.android/debug.keystore` (the key the phone's copy has), and publishes the
   APK plus `tally-android-update.json` to github.com/kalki-kgp/Tally releases.
+  APK and zip are named `tally-<versionName>-<versionCode>.apk/.zip` so no two
+  builds share a filename; only the manifest's name is fixed.
   The app's updater (`update/AppUpdater.kt`) reads that manifest, verifies the
   SHA-256 and hands the APK to Android's installer. Never build releases in CI
   or with a new key: the phone would refuse the update, and uninstalling to get

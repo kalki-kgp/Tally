@@ -41,10 +41,14 @@ if [[ -n "$APKSIGNER" ]]; then
 fi
 
 # ── Assets ───────────────────────────────────────────────────────────────────
+# Versioned names, so downloads of different releases never overwrite each other.
+# Only the manifest keeps a fixed name: it is the address the app checks.
+APK_NAME="tally-$VERSION_NAME-$CODE.apk"
+ZIP_NAME="tally-$VERSION_NAME-$CODE.zip"
 rm -rf dist && mkdir dist
-cp "$APK" dist/tally-release.apk
-SHA=$(shasum -a 256 dist/tally-release.apk | cut -d' ' -f1)
-python3 - "$VERSION_NAME" "$CODE" "$SHA" "$NOTES" "https://github.com/$REPO/releases/download/$TAG/tally-release.apk" <<'PY'
+cp "$APK" "dist/$APK_NAME"
+SHA=$(shasum -a 256 "dist/$APK_NAME" | cut -d' ' -f1)
+python3 - "$VERSION_NAME" "$CODE" "$SHA" "$NOTES" "https://github.com/$REPO/releases/download/$TAG/$APK_NAME" <<'PY'
 import json, sys
 name, code, sha, notes, url = sys.argv[1:]
 manifest = {"platform": "android", "versionName": name, "versionCode": int(code),
@@ -53,14 +57,15 @@ open("dist/tally-android-update.json", "w").write(json.dumps(manifest, indent=2)
 PY
 
 # The zipped copy is for handing over directly; a 27 MB upload times out.
-rm -f tally-release-apk.zip && cp dist/tally-release.apk tally-release.apk && zip -9 -q tally-release-apk.zip tally-release.apk
+(cd dist && zip -9 -q "../$ZIP_NAME" "$APK_NAME")
 
 # ── Publish ──────────────────────────────────────────────────────────────────
 git add -A
 git commit -q -m "Release $TAG"
 git tag "$TAG"
 git push -q origin HEAD --tags
-gh release create "$TAG" dist/tally-release.apk dist/tally-android-update.json \
+gh release create "$TAG" "dist/$APK_NAME" dist/tally-android-update.json \
   --repo "$REPO" --title "Tally $VERSION_NAME" --notes "${NOTES:-Tally $VERSION_NAME}"
 
+echo "Built $ZIP_NAME."
 echo "Published $TAG. Phones pick it up on next open, or Settings → Check for updates."
