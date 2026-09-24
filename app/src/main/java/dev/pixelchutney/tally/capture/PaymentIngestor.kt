@@ -2,6 +2,7 @@ package dev.pixelchutney.tally.capture
 
 import android.util.Log
 import dev.pixelchutney.tally.ai.CategoryRanker
+import dev.pixelchutney.tally.ai.ParsedPayment
 import dev.pixelchutney.tally.ai.RankInput
 import dev.pixelchutney.tally.ai.Ranking
 import dev.pixelchutney.tally.core.Time

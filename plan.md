@@ -542,6 +542,12 @@ each payment. The owner wanted the prompt kept, only with the amount already in
 it. The prompt is back as the default; a read amount turns it into the category
 step directly; sort later is an opt-in switch. The rest of this section stands.
 
+v19: the regex parser is gone. On the owner's phone it missed both of their banks
+(Union Bank's "Rs:" and HDFC's "A transaction of … was made") and PayZapp's
+"payment for … is successful". Haiku now reads each candidate notification with
+structured output (`PaymentExtractor`). Navi's real package is `com.naviapp`;
+the seed guessed `com.navi.android`, so Navi was never detected on a fresh install.
+
 #### v17 as first built
 
 The owner stopped using Tally after three or four days. The prompt after every

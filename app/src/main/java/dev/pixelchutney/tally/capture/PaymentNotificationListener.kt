@@ -6,10 +6,13 @@ import android.service.notification.StatusBarNotification
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import dagger.hilt.android.AndroidEntryPoint
+import dev.pixelchutney.tally.ai.Extraction
+import dev.pixelchutney.tally.ai.PaymentExtractor
 import dev.pixelchutney.tally.data.db.WatchedAppDao
 import dev.pixelchutney.tally.data.settings.SettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -24,13 +27,17 @@ import javax.inject.Inject
  * that refuse to work alongside accessibility services (Navi, CRED) check for
  * those specifically; this is a different permission.
  *
- * Parsing is cheap and happens off the main thread. Everything read that is not a
- * debit is dropped on the spot and never stored.
+ * Reading is done by Haiku (`PaymentExtractor`), not by patterns: bank wording
+ * varies too much for hand-written rules to keep up. What reaches the model is
+ * gated by *who sent it*, never by what it says — a payment app, a bank app, or
+ * a text from a bank's sender ID. Texts from people never leave the phone.
+ * Anything that is not money going out is dropped on the spot and never stored.
  */
 @AndroidEntryPoint
 class PaymentNotificationListener : NotificationListenerService() {
 
     @Inject lateinit var ingestor: PaymentIngestor
+    @Inject lateinit var extractor: PaymentExtractor
     @Inject lateinit var watchedApps: WatchedAppDao
     @Inject lateinit var settings: SettingsStore
     @Inject lateinit var scope: CoroutineScope
@@ -82,19 +89,51 @@ class PaymentNotificationListener : NotificationListenerService() {
         if (!settings.current().readPaymentNotifications) return
         val isPaymentApp = kind == Kind.PAYMENT_APP
 
-        if (kind == Kind.SMS) {
-            // A friend's "paid ₹500 for the cab" must never become a payment.
-            if (!PaymentNotificationParser.looksLikeBankSender(title)) return
-            if (!PaymentNotificationParser.looksLikeBankMessage(body)) return
-        }
+        // Texts from people are never sent anywhere — only bank sender IDs.
+        if (kind == Kind.SMS && !looksLikeBankSender(title)) return
+        // No digit, no amount: not worth a call.
+        if ((title + body).none { it.isDigit() }) return
 
-        val parsed = PaymentNotificationParser.parse("$title\n$body") ?: return
-        ingestor.ingest(
-            payment = parsed,
-            notifyingPackage = pkg,
-            postedAt = postedAt,
-            fromPaymentApp = isPaymentApp,
-        )
+        val source = runCatching {
+            packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+        }.getOrDefault(pkg)
+
+        // A payment notification usually lands while the phone is online, but not
+        // always. A couple of short retries cover a flaky moment without holding
+        // on to the text for long.
+        for (attempt in 0..RETRIES) {
+            when (val result = extractor.extract(source, title, body)) {
+                is Extraction.Payment -> {
+                    lastProblem = null
+                    ingestor.ingest(
+                        payment = result.payment,
+                        notifyingPackage = pkg,
+                        postedAt = postedAt,
+                        fromPaymentApp = isPaymentApp,
+                    )
+                    return
+                }
+                Extraction.NotAPayment -> return
+                is Extraction.Blocked -> {
+                    lastProblem = result.reason
+                    return
+                }
+                is Extraction.Unavailable -> {
+                    lastProblem = "Couldn't reach Haiku: ${result.reason}"
+                    if (attempt < RETRIES) delay(RETRY_DELAY_MS * (attempt + 1))
+                }
+            }
+        }
+    }
+
+    /**
+     * Banks text from sender IDs — "BP-HDFCBK-S", "JK-UNIONB-T" — never from a
+     * contact name or a phone number. This decides only what may be read, not
+     * what it says.
+     */
+    private fun looksLikeBankSender(title: String): Boolean {
+        val sender = title.trim()
+        return SENDER_ID.matches(sender) && sender.none { it.isLowerCase() }
     }
 
     /**
@@ -121,6 +160,18 @@ class PaymentNotificationListener : NotificationListenerService() {
 
     companion object {
         private const val TAG = "PaymentListener"
+
+        private const val RETRIES = 2
+        private const val RETRY_DELAY_MS = 8_000L
+        private val SENDER_ID = Regex("[A-Z0-9]{2}-[A-Z0-9]{3,10}(?:-[A-Z])?|[A-Z]{5,10}")
+
+        /**
+         * Why the last payment notification could not be read, or null when the
+         * last one worked. Shown in Settings: without it, AI being off looks
+         * exactly like a broken listener.
+         */
+        @Volatile var lastProblem: String? = null
+            private set
 
         /** True while Android has this listener bound. Read by Settings. */
         @Volatile var connected: Boolean = false

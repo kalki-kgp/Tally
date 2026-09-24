@@ -186,7 +186,17 @@ fun SettingsScreen(
                 Divider()
                 ToggleRow(
                     label = "Read payment notifications",
-                    description = "Off: Tally ignores payment notifications even with access granted.",
+                    // Haiku does the reading, so without AI this switch does nothing —
+                    // say so here rather than let it look broken.
+                    description = when {
+                        !state.config.readPaymentNotifications ->
+                            "Off: Tally ignores payment notifications even with access granted."
+                        !state.config.aiEnabled || !state.hasApiKey ->
+                            "Needs AI switched on with an API key (below): Haiku reads the amount."
+                        else -> dev.pixelchutney.tally.capture.PaymentNotificationListener.lastProblem
+                            ?.let { "Last one failed: $it" }
+                            ?: "Haiku reads the amount from UPI app notifications and bank texts."
+                    },
                     checked = state.config.readPaymentNotifications,
                     onChange = viewModel::setReadNotifications,
                 )

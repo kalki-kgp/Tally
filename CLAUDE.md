@@ -52,6 +52,12 @@ not for a general audience.
   apps and bank texts from the SMS app — never a chat (MessagingStyle) from a
   payment app, and SMS only from a bank sender ID. It is a notification listener,
   not an accessibility service; the Navi/CRED rule above is untouched.
+- **Amounts are extracted by Haiku (`ai/PaymentExtractor`), never by patterns.**
+  The owner asked for this explicitly after a regex parser missed their real bank
+  wording ("Debited Rs:237.00", "A transaction of Rs. 138.43 was made using your
+  card"). Do not reintroduce hand-written extraction rules. Gates on *which*
+  notifications may be sent (sender, a digit present) are fine; rules about what
+  the text says are not. It needs AI on and a key; Settings says so when not.
 - **Nothing stops prompting on its own.** An automatic mute after repeated "no
   payment" answers was removed: it was invisible, and a muted app looked exactly
   like broken detection. If prompting should stop, it stops because a switch the
@@ -155,7 +161,7 @@ the "Other…" choices in that order; the "To sort" chips use the same order.
 - `plan.md` — the full spec, and §12 is the running record of what was rebuilt
   against reality and why. Read it before changing detection.
 - `capture/` — the watcher, the session tracker, the notification flow, the
-  notification listener, parser (`PaymentNotificationParser`, tested) and
+  notification listener and
   `PaymentIngestor` (dedup by UPI ref, then same amount within 10 minutes).
 - `ui/inbox/` — "To sort".
 - `capture/ui/` — the half-screen sheet behind the notification.
